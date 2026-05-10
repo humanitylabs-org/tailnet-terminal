@@ -18,6 +18,48 @@ as_root() {
 
 "$APP_DIR/scripts/prereq-check.sh"
 
+TERMINAL_UI_DIR="/usr/local/share/tailnet-terminal"
+TERMINAL_INDEX="$TERMINAL_UI_DIR/index.html"
+BOOTSTRAP_PORT="17681"
+
+mkdir -p "$TERMINAL_UI_DIR"
+
+# Generate a version-matched ttyd index and patch title.
+BOOT_PID=""
+cleanup_bootstrap() {
+  if [[ -n "$BOOT_PID" ]] && kill -0 "$BOOT_PID" 2>/dev/null; then
+    kill "$BOOT_PID" 2>/dev/null || true
+    sleep 0.5
+    kill -9 "$BOOT_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup_bootstrap EXIT
+
+/usr/local/bin/ttyd --interface 127.0.0.1 --port "$BOOTSTRAP_PORT" --writable bash >/tmp/tailnet-terminal-bootstrap.log 2>&1 &
+BOOT_PID="$!"
+for _ in $(seq 1 50); do
+  if curl -fsS "http://127.0.0.1:${BOOTSTRAP_PORT}" >/tmp/tailnet-terminal-index.raw.html 2>/dev/null; then
+    break
+  fi
+  sleep 0.2
+done
+
+if [[ ! -s /tmp/tailnet-terminal-index.raw.html ]]; then
+  fail "Failed to bootstrap ttyd index.html for title patching"
+fi
+
+python3 - <<'PY'
+from pathlib import Path
+src = Path('/tmp/tailnet-terminal-index.raw.html').read_text(encoding='utf-8')
+out = src.replace('<title>ttyd - Terminal</title>', '<title>Tailnet Terminal</title>', 1)
+Path('/tmp/tailnet-terminal-index.custom.html').write_text(out, encoding='utf-8')
+PY
+
+as_root install -m 0644 /tmp/tailnet-terminal-index.custom.html "$TERMINAL_INDEX"
+rm -f /tmp/tailnet-terminal-index.raw.html /tmp/tailnet-terminal-index.custom.html
+cleanup_bootstrap
+BOOT_PID=""
+
 cat <<'EOF' >/tmp/web-terminal.service
 [Unit]
 Description=Web Terminal (ttyd via Tailscale)
@@ -34,6 +76,7 @@ ExecStart=/usr/local/bin/ttyd \
   --writable \
   --max-clients 3 \
   --ping-interval 30 \
+  --index /usr/local/share/tailnet-terminal/index.html \
   bash
 Restart=on-failure
 RestartSec=5
@@ -46,7 +89,8 @@ as_root cp /tmp/web-terminal.service /etc/systemd/system/web-terminal.service
 rm -f /tmp/web-terminal.service
 
 as_root systemctl daemon-reload
-as_root systemctl enable --now web-terminal.service
+as_root systemctl enable web-terminal.service
+as_root systemctl restart web-terminal.service
 systemctl is-active --quiet web-terminal.service || fail "web-terminal.service failed to start"
 
 tailscale serve --bg --https=443 --set-path=/terminal http://127.0.0.1:7681 >/dev/null
