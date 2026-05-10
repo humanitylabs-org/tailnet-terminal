@@ -23,6 +23,25 @@ TERMINAL_INDEX="$TERMINAL_UI_DIR/index.html"
 BOOTSTRAP_PORT="17681"
 
 mkdir -p "$TERMINAL_UI_DIR"
+install -m 0644 "$APP_DIR/icon-192.png" "$TERMINAL_UI_DIR/icon-192.png"
+install -m 0644 "$APP_DIR/icon-512.png" "$TERMINAL_UI_DIR/icon-512.png"
+install -m 0644 "$APP_DIR/apple-touch-icon.png" "$TERMINAL_UI_DIR/apple-touch-icon.png"
+cat >"$TERMINAL_UI_DIR/manifest.webmanifest" <<'JSON'
+{
+  "name": "Tailnet Terminal",
+  "short_name": "Terminal",
+  "id": "/terminal/",
+  "start_url": "/terminal/",
+  "scope": "/terminal/",
+  "display": "standalone",
+  "background_color": "#0B0B0D",
+  "theme_color": "#0B0B0D",
+  "icons": [
+    { "src": "/terminal/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/terminal/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
+JSON
 
 # Generate a version-matched ttyd index and patch title.
 BOOT_PID=""
@@ -52,6 +71,9 @@ python3 - <<'PY'
 from pathlib import Path
 src = Path('/tmp/tailnet-terminal-index.raw.html').read_text(encoding='utf-8')
 out = src.replace('<title>ttyd - Terminal</title>', '<title>Tailnet Terminal</title>', 1)
+insert = '\n<link rel="manifest" href="/terminal/manifest.webmanifest">\n<link rel="icon" type="image/png" sizes="192x192" href="/terminal/icon-192.png">\n<link rel="apple-touch-icon" href="/terminal/apple-touch-icon.png">\n'
+if '/terminal/manifest.webmanifest' not in out:
+    out = out.replace('</head>', insert + '</head>', 1)
 Path('/tmp/tailnet-terminal-index.custom.html').write_text(out, encoding='utf-8')
 PY
 
@@ -94,6 +116,10 @@ as_root systemctl restart web-terminal.service
 systemctl is-active --quiet web-terminal.service || fail "web-terminal.service failed to start"
 
 tailscale serve --bg --https=443 --set-path=/terminal http://127.0.0.1:7681 >/dev/null
+tailscale serve --bg --https=443 --set-path=/terminal/manifest.webmanifest "$TERMINAL_UI_DIR/manifest.webmanifest" >/dev/null
+tailscale serve --bg --https=443 --set-path=/terminal/apple-touch-icon.png "$TERMINAL_UI_DIR/apple-touch-icon.png" >/dev/null
+tailscale serve --bg --https=443 --set-path=/terminal/icon-192.png "$TERMINAL_UI_DIR/icon-192.png" >/dev/null
+tailscale serve --bg --https=443 --set-path=/terminal/icon-512.png "$TERMINAL_UI_DIR/icon-512.png" >/dev/null
 
 DNS_NAME="$(tailscale status --self --json 2>/dev/null | python3 -c 'import json,sys; print((json.load(sys.stdin).get("Self") or {}).get("DNSName", "").rstrip("."))' 2>/dev/null || true)"
 if [[ -n "$DNS_NAME" ]]; then
